@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd'>
+<qgis version="3.28.0" minimumMaximumEarliestVersion="3.0.0">
+  <project>
+    <title>GeoIA - Détection stade</title>
+    <layer-tree-group name="Layers">
+    </layer-tree-group>
+    <mapcanvas/>
+    <layer-tree-layer expand="1" checked="Qt::Checked">
+      <id>stadium_raster</id>
+      <layername>sample_aerial</layername>
+      <datasource>data/sample_aerial.tif</datasource>
+      <provider>gdal</provider>
+    </layer-tree-layer>
+    <layer-tree-layer expand="1" checked="Qt::Unchecked">
+      <id>sample_vector</id>
+      <layername>sample_polygons</layername>
+      <datasource>data/sample_polygons.geojson</datasource>
+      <provider>ogr</provider>
+    </layer-tree-layer>
+  </project>
+</qgis>
