@@ -1,0 +1,43 @@
+{
+  "type": "FeatureCollection",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "EPSG:4326"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          47.5261,
+          -18.9133
+        ]
+      },
+      "properties": {
+        "name": "Mahamasina Municipal Stadium",
+        "capacity": 22000,
+        "notes": "Main national stadium, hosts football & athletics",
+        "source": "AI-assisted detection (Claude)"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          47.5255,
+          -18.912
+        ]
+      },
+      "properties": {
+        "name": "Stade de Mahamasina (Annexe)",
+        "capacity": 5000,
+        "notes": "Training/secondary pitch adjacent to main stadium",
+        "source": "AI-assisted detection (Claude)"
+      }
+    }
+  ]
+}

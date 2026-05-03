@@ -42,6 +42,13 @@ QGIS 3.44.8 test workflow
 6. For raster layers, a new polygon layer named like `YourLayer stadium detections` is added to the project.
 7. Zoom to the new layer and inspect the bounding boxes.
 
+How to load data
+
+- For a GeoTIFF, use `Layer -> Add Layer -> Add Raster Layer...` and select the image file.
+- For a vector file, use `Layer -> Add Layer -> Add Vector Layer...` and open your GeoJSON, Shapefile, or similar file.
+- Make sure the layer is visible in the Layers panel, then click it once so it becomes the active layer before running the script.
+- If the data appears in the wrong place, check the layer CRS and project CRS so they match.
+
 If you want to test the PNG overlay path outside QGIS first:
 
 ```bash

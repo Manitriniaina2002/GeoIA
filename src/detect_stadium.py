@@ -81,6 +81,7 @@ def _bbox_to_polygon(extent, width: int, height: int, bbox: Tuple[int, int, int,
     from qgis.core import QgsGeometry, QgsPointXY
 
     x, y, w, h = bbox
+    # Default pixel->map approximation using extent and pixel dimensions
     min_x = extent.xMinimum() + (x / width) * extent.width()
     max_x = extent.xMinimum() + ((x + w) / width) * extent.width()
     max_y = extent.yMaximum() - (y / height) * extent.height()
@@ -94,6 +95,33 @@ def _bbox_to_polygon(extent, width: int, height: int, bbox: Tuple[int, int, int,
         QgsPointXY(min_x, min_y),
     ]
     return QgsGeometry.fromPolygonXY([ring])
+
+
+def _bbox_to_polygon_with_transform(transform, bbox: Tuple[int, int, int, int]):
+    """Convert a pixel-space bbox to a QgsGeometry polygon using a rasterio affine transform.
+
+    `transform` is the Affine transform from rasterio (src.transform).
+    bbox is (x, y, w, h) in pixel coordinates where (0,0) is top-left.
+    """
+    from qgis.core import QgsGeometry, QgsPointXY
+
+    x, y, w, h = bbox
+    # rasterio affine: transform * (col, row) -> (x, y) in map coords
+    try:
+        lon1, lat1 = transform * (x, y + h)
+        lon2, lat2 = transform * (x + w, y)
+
+        ring = [
+            QgsPointXY(lon1, lat1),
+            QgsPointXY(lon2, lat1),
+            QgsPointXY(lon2, lat2),
+            QgsPointXY(lon1, lat2),
+            QgsPointXY(lon1, lat1),
+        ]
+        return QgsGeometry.fromPolygonXY([ring])
+    except Exception:
+        # Fallback to None to let caller use alternate method
+        return None
 
 
 def _create_detection_layer(name: str, crs_authid: str):
@@ -122,7 +150,24 @@ def _append_detection_features(layer, detections: List[Dict], extent, raster_wid
     provider = layer.dataProvider()
     features = []
     for detection in detections:
-        geometry = _bbox_to_polygon(extent, raster_width, raster_height, detection["bbox"])
+        # Attempt to use rasterio transform when possible for precise georeferencing
+        geometry = None
+        try:
+            source = getattr(layer, 'dataProvider')().dataSourceUri()
+            # dataSourceUri may include a |; normalize
+            source_path = re.split(r"\|", source, maxsplit=1)[0]
+            try:
+                import rasterio
+                with rasterio.open(source_path) as src:
+                    transform = src.transform
+                    geometry = _bbox_to_polygon_with_transform(transform, detection["bbox"])
+            except Exception:
+                geometry = None
+        except Exception:
+            geometry = None
+
+        if geometry is None:
+            geometry = _bbox_to_polygon(extent, raster_width, raster_height, detection["bbox"])
         x, y, w, h = detection["bbox"]
         feature = QgsFeature(layer.fields())
         feature.setGeometry(geometry)
