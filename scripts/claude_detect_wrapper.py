@@ -32,7 +32,19 @@ def run_detection_on_layer(
     min_area: int = 5000,
     create_layer: bool = True,
     draw_overlay: bool = False,
-    overlay_path: str = None
+    overlay_path: str = None,
+    region: str = "World",
+    detection_mode: str = "grounding_dino",
+    text_prompt: str = None,
+    tile_size: int = 800,
+    tile_overlap: int = 100,
+    box_threshold: float = 0.25,
+    text_threshold: float = 0.20,
+    model_id: str = "IDEA-Research/grounding-dino-tiny",
+    device: str = None,
+    model_path: str = None,
+    scaler_path: str = None,
+    model_object: Any = None,
 ) -> Dict[str, Any]:
     """
     Run real stadium detection on an active QGIS raster layer using OpenCV.
@@ -46,12 +58,13 @@ def run_detection_on_layer(
         create_layer: If True, create a polygon layer with results in QGIS
         draw_overlay: If True, create a PNG overlay with bounding boxes
         overlay_path: Path to save PNG overlay (ignored if draw_overlay=False)
+        region: Region name for output layer (e.g., "California", "Madagascar")
     
     Returns:
         Dict with detection results, layer info, and created layer name
     
     Example:
-        result = run_detection_on_layer("Madagascar Raster", min_area=5000)
+        result = run_detection_on_layer("Madagascar Raster", min_area=5000, region="Madagascar")
         print(f"Found {result['detection_count']} stadiums")
         print(f"Created layer: {result['created_layer']}")
     """
@@ -89,12 +102,45 @@ def run_detection_on_layer(
         if "|" in source_path:
             source_path = source_path.split("|")[0]
         
-        # Run the full QGIS-aware detection pipeline
-        # This will automatically create a polygon layer with georeferenced detections
+        # Run the full QGIS-aware detection pipeline.
+        # Grounding DINO zero-shot is the default. A trained model remains available as a separate mode.
+        model_args = {}
+        backend = detection_mode.lower().strip()
+        if backend in {"model", "trained_model", "trained-model"}:
+            model_args = {
+                "model_path": model_path,
+                "scaler_path": scaler_path,
+                "model_object": model_object,
+                "detection_backend": "heuristic",
+            }
+            algorithm_label = "OpenCV contour detection with ellipse fitting"
+        elif backend in {"heuristic", "opencv", "open_cv"}:
+            model_args = {
+                "detection_backend": "heuristic",
+                "model_path": model_path,
+                "scaler_path": scaler_path,
+                "model_object": model_object,
+            }
+            algorithm_label = "OpenCV contour detection with ellipse fitting"
+        else:
+            model_args = {
+                "detection_backend": "grounding_dino",
+                "text_prompt": text_prompt,
+                "tile_size": tile_size,
+                "tile_overlap": tile_overlap,
+                "box_threshold": box_threshold,
+                "text_threshold": text_threshold,
+                "model_id": model_id,
+                "device": device,
+            }
+            algorithm_label = "Grounding DINO zero-shot"
+
         detections = detect_from_qgis_layer(
             layer, 
             min_area=float(min_area), 
-            create_output_layer=create_layer
+            create_output_layer=create_layer,
+            region=region,
+            **model_args,
         )
         
         # Find the created output layer
@@ -124,9 +170,17 @@ def run_detection_on_layer(
             "detection_count": len(detections),
             "created_layer": created_layer_name,
             "overlay_path": overlay_result,
+            "region": region,
             "parameters": {
                 "min_area": min_area,
-                "algorithm": "OpenCV contour detection with ellipse fitting"
+                "region": region,
+                "detection_mode": detection_mode,
+                "text_prompt": text_prompt,
+                "tile_size": tile_size,
+                "tile_overlap": tile_overlap,
+                "box_threshold": box_threshold,
+                "text_threshold": text_threshold,
+                "algorithm": algorithm_label
             }
         }
     
@@ -147,6 +201,7 @@ def run_detection_on_layer(
             "error_type": type(e).__name__,
             "traceback": traceback.format_exc()
         }
+
 
 
 def list_available_layers() -> Dict[str, Any]:

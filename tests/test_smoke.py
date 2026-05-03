@@ -131,5 +131,76 @@ class TestNAIPFingerprint:
             pytest.skip("NAIP fingerprint deps not available")
 
 
+class TestTrainingDataGeneration:
+    """Test training data generation pipeline."""
+
+    def test_generate_training_data_import(self):
+        """Test that training data script can be imported."""
+        from scripts.generate_training_data import (
+            load_fingerprints,
+            flatten_fingerprint,
+            create_dataset,
+            save_training_data
+        )
+        assert callable(load_fingerprints)
+        assert callable(flatten_fingerprint)
+        assert callable(create_dataset)
+        assert callable(save_training_data)
+
+    def test_flatten_fingerprint(self):
+        """Test flattening fingerprint to features."""
+        from scripts.generate_training_data import flatten_fingerprint
+        
+        fp = {
+            'histogram_rgb': [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            'clahe': {'contrast': 2.5, 'brightness': 100},
+            'lbp_histogram': [10, 20, 30],
+            'stats': {'mean': 128, 'std': 32}
+        }
+        
+        features = flatten_fingerprint(fp)
+        assert isinstance(features, dict)
+        assert len(features) > 0
+        # All values should be numeric
+        for v in features.values():
+            assert isinstance(v, (int, float))
+
+    def test_create_dataset_with_synthetic(self):
+        """Test dataset creation with synthetic fingerprints."""
+        from scripts.generate_training_data import create_dataset, flatten_fingerprint
+        
+        # Create synthetic fingerprints
+        fingerprints = []
+        for i in range(5):
+            fp = {
+                'histogram_rgb': [
+                    np.random.randint(0, 256, 10).tolist(),
+                    np.random.randint(0, 256, 10).tolist(),
+                    np.random.randint(0, 256, 10).tolist(),
+                ],
+                'clahe': {'contrast': 2.0, 'brightness': 100},
+                'lbp_histogram': np.random.randint(0, 100, 10).tolist(),
+            }
+            fingerprints.append((f'tile_{i}', fp))
+        
+        # Create dataset
+        df, scaler = create_dataset(fingerprints, normalize=False)
+        assert len(df) == 5
+        assert len(df.columns) > 0
+        
+        # With normalization
+        df_norm, scaler_norm = create_dataset(fingerprints, normalize=True)
+        assert len(df_norm) == 5
+        assert scaler_norm is not None
+
+    def test_train_model_import(self):
+        """Test that training script can be imported."""
+        try:
+            from scripts.train_model import train_anomaly_detector
+            assert callable(train_anomaly_detector)
+        except ImportError as e:
+            pytest.skip(f"Training deps not available: {e}")
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

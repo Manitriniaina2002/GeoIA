@@ -8,3 +8,10 @@ click
 tqdm
 requests
 pytest
+scikit-learn
+pandas
+Pillow
+torch
+transformers
+geoai-py
+leafmap

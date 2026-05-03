@@ -88,7 +88,7 @@ Example:
 
 ```bash
 pip install geoai-py leafmap
-python scripts/download_opengeoai_data.py --out data --max-items 1
+python scripts/download_opengeoai_data.py --bbox -117.6029 47.65 -117.5936 47.6563 --out data/opengeoai --max-items 1 --stats
 ```
 
-Pass `--bbox MINX MINY MAXX MAXY` to specify your ROI in lon/lat.
+Pass `--bbox MINX MINY MAXX MAXY` to specify your ROI in lon/lat. Use `--year` to filter NAIP imagery, and `--skip-naip` / `--skip-buildings` to download only one dataset.

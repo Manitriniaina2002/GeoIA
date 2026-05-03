@@ -12,6 +12,15 @@ import re
 import math
 from io import BytesIO
 from urllib.request import Request, urlopen
+import pickle
+from pathlib import Path
+
+try:
+    import pandas as pd
+    from skimage import feature as _sk_feature
+except Exception:
+    pd = None
+    _sk_feature = None
 
 try:
     import cv2
@@ -29,14 +38,118 @@ except Exception:
     Image = None
 
 
-def detect_stadium_opencv(image_path: str, min_area: int = 5000) -> List[Dict]:
+def _read_image_array(image_path: str):
+    """Read an image into a BGR array, with TIFF-friendly fallbacks."""
+    if cv2 is None or np is None:
+        raise RuntimeError("OpenCV and numpy are required for this function. Install from requirements.txt")
+
+    suffix = Path(image_path).suffix.lower()
+    prefer_rasterio = suffix in {".tif", ".tiff"}
+
+    if prefer_rasterio and rasterio is not None:
+        try:
+            with rasterio.open(image_path) as src:
+                data = src.read()
+            if data.ndim == 2:
+                data = np.stack([data, data, data], axis=-1)
+            else:
+                data = np.transpose(data[:3], (1, 2, 0)) if data.shape[0] >= 3 else np.transpose(data, (1, 2, 0))
+                if data.shape[2] == 1:
+                    data = np.repeat(data, 3, axis=2)
+                elif data.shape[2] > 3:
+                    data = data[:, :, :3]
+
+            if data.dtype != np.uint8:
+                data = data.astype(np.float32)
+                finite = data[np.isfinite(data)] if np.isfinite(data).any() else None
+                if finite is not None and finite.size:
+                    lo = float(np.percentile(finite, 2))
+                    hi = float(np.percentile(finite, 98))
+                else:
+                    lo = float(np.min(data))
+                    hi = float(np.max(data))
+                if hi > lo:
+                    data = (np.clip(data, lo, hi) - lo) * (255.0 / (hi - lo))
+                else:
+                    data = np.clip(data, 0, 255)
+                data = data.astype(np.uint8)
+
+            return cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+        except Exception:
+            pass
+
+    if Image is not None:
+        try:
+            with Image.open(image_path) as pil_img:
+                data = np.array(pil_img)
+            if data.ndim == 2:
+                data = np.stack([data, data, data], axis=-1)
+            elif data.shape[2] > 3:
+                data = data[:, :, :3]
+            if data.dtype != np.uint8:
+                data = data.astype(np.float32)
+                finite = data[np.isfinite(data)] if np.isfinite(data).any() else None
+                if finite is not None and finite.size:
+                    lo = float(np.percentile(finite, 2))
+                    hi = float(np.percentile(finite, 98))
+                else:
+                    lo = float(np.min(data))
+                    hi = float(np.max(data))
+                if hi > lo:
+                    data = (np.clip(data, lo, hi) - lo) * (255.0 / (hi - lo))
+                else:
+                    data = np.clip(data, 0, 255)
+                data = data.astype(np.uint8)
+            return cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+        except Exception:
+            pass
+
+    img = cv2.imread(image_path)
+    if img is not None:
+        return img
+
+    if not prefer_rasterio and rasterio is not None:
+        try:
+            with rasterio.open(image_path) as src:
+                data = src.read()
+            if data.ndim == 2:
+                data = np.stack([data, data, data], axis=-1)
+            else:
+                data = np.transpose(data[:3], (1, 2, 0)) if data.shape[0] >= 3 else np.transpose(data, (1, 2, 0))
+                if data.shape[2] == 1:
+                    data = np.repeat(data, 3, axis=2)
+                elif data.shape[2] > 3:
+                    data = data[:, :, :3]
+
+            if data.dtype != np.uint8:
+                data = data.astype(np.float32)
+                finite = data[np.isfinite(data)] if np.isfinite(data).any() else None
+                if finite is not None and finite.size:
+                    lo = float(np.percentile(finite, 2))
+                    hi = float(np.percentile(finite, 98))
+                else:
+                    lo = float(np.min(data))
+                    hi = float(np.max(data))
+                if hi > lo:
+                    data = (np.clip(data, lo, hi) - lo) * (255.0 / (hi - lo))
+                else:
+                    data = np.clip(data, 0, 255)
+                data = data.astype(np.uint8)
+
+            return cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+        except Exception:
+            pass
+
+    return None
+
+
+def detect_stadium_opencv(image_path: str, min_area: int = 5000, model_path: Optional[str] = None, scaler_path: Optional[str] = None, model_object: Optional[object] = None) -> List[Dict]:
     """Detect candidate stadium-like shapes in an aerial image using OpenCV.
 
     This is a heuristic starter implementation: it finds large contours and fits ellipses/rects.
     """
-    if cv2 is None or np is None:
-        raise RuntimeError("OpenCV and numpy are required for this function. Install from requirements.txt")
-    img = cv2.imread(image_path)
+    from typing import Optional
+    img = _read_image_array(image_path)
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {image_path}")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -66,7 +179,158 @@ def detect_stadium_opencv(image_path: str, min_area: int = 5000) -> List[Dict]:
         detections.append(detection)
     # sort by area descending
     detections.sort(key=lambda d: d["area"], reverse=True)
+
+    # If a trained model is provided (path or object), run inference per-detection
+    model = None
+    scaler = None
+    try:
+        if model_object is not None:
+            model = model_object
+        elif model_path:
+            model = load_model(model_path)
+        if scaler_path:
+            try:
+                with open(scaler_path, 'rb') as sf:
+                    scaler = pickle.load(sf)
+            except Exception:
+                scaler = None
+    except Exception:
+        model = None
+        scaler = None
+
+    if model is not None:
+        for det in detections:
+            try:
+                features = _extract_features_from_crop(img, det['bbox'])
+                label, score = predict_with_model(model, scaler, features)
+                det['model_label'] = label
+                det['model_score'] = score
+            except Exception:
+                det['model_label'] = None
+                det['model_score'] = None
+
     return detections
+
+
+def load_model(path: str):
+    """Load a pickled sklearn model (or similar) from `path`."""
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Model file not found: {path}")
+    with open(p, 'rb') as f:
+        model = pickle.load(f)
+    return model
+
+
+def _extract_features_from_crop(img: 'np.ndarray', bbox: Tuple[int, int, int, int]) -> Dict[str, float]:
+    """Compute a small set of features from an image crop suitable for model inference.
+
+    Returns flat numeric features used by the training pipeline (means, CLAHE stats, LBP proxies).
+    """
+    x, y, w, h = bbox
+    h_img, w_img = img.shape[:2]
+    # clamp bbox
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(w_img, x + w)
+    y1 = min(h_img, y + h)
+    crop = img[y0:y1, x0:x1]
+    if crop.size == 0:
+        return {}
+
+    features = {}
+    # Per-channel means and stds
+    chans = cv2.split(crop)
+    for i, ch in enumerate(chans):
+        features[f'chan{i}_mean'] = float(np.mean(ch))
+        features[f'chan{i}_std'] = float(np.std(ch))
+        # histogram mean (rough compact descriptor)
+        hist, _ = np.histogram(ch.ravel(), bins=64, range=(0, 255))
+        features[f'hist_c{i}_mean'] = float(np.mean(hist))
+
+    # CLAHE (on grayscale)
+    try:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        cl = clahe.apply(gray)
+        features['clahe_mean'] = float(np.mean(cl))
+        features['clahe_std'] = float(np.std(cl))
+    except Exception:
+        features['clahe_mean'] = 0.0
+        features['clahe_std'] = 0.0
+
+    # LBP fallback: use skimage if available, otherwise edge density
+    try:
+        if _sk_feature is not None:
+            grayf = (gray / 255.0).astype('float32')
+            lbp = _sk_feature.local_binary_pattern((grayf * 255).astype(np.uint8), P=8, R=1, method='uniform')
+            lbp_hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, 11), density=True)
+            features['lbp_mean'] = float(np.mean(lbp_hist))
+            features['lbp_std'] = float(np.std(lbp_hist))
+        else:
+            edges = cv2.Canny(gray, 50, 150)
+            features['lbp_mean'] = float(np.mean(edges))
+            features['lbp_std'] = float(np.std(edges))
+    except Exception:
+        features['lbp_mean'] = 0.0
+        features['lbp_std'] = 0.0
+
+    return features
+
+
+def predict_with_model(model, scaler, features: Dict[str, float]):
+    """Run model inference on a single flattened `features` dict.
+
+    - `model` is a scikit-learn style model (pickled) or None.
+    - `scaler` is an optional scikit-learn scaler (fit on training features).
+
+    Returns (label, score) where `score` is model-dependent (probability or anomaly score).
+    """
+    if model is None:
+        return None, None
+    if pd is None:
+        # Not enough dependencies to prepare a DataFrame
+        return None, None
+
+    df = pd.DataFrame([features])
+    # Align columns if model exposes feature names
+    try:
+        if hasattr(model, 'feature_names_in_'):
+            cols = list(model.feature_names_in_)
+            # add missing cols with zeros
+            for c in cols:
+                if c not in df.columns:
+                    df[c] = 0.0
+            df = df[cols]
+    except Exception:
+        pass
+
+    X = df.values
+    if scaler is not None:
+        try:
+            X = scaler.transform(X)
+        except Exception:
+            pass
+
+    # Classification with predict_proba
+    try:
+        if hasattr(model, 'predict_proba'):
+            proba = model.predict_proba(X)
+            # choose positive class probability if available
+            score = float(proba[0].max())
+            label = int(model.predict(X)[0])
+            return label, score
+        elif hasattr(model, 'decision_function'):
+            score = float(model.decision_function(X)[0])
+            label = int(model.predict(X)[0]) if hasattr(model, 'predict') else None
+            return label, score
+        else:
+            pred = model.predict(X)
+            return int(pred[0]), None
+    except Exception:
+        return None, None
 
 
 def _normalize_raster_source(source: str) -> str:
@@ -138,13 +402,17 @@ def _create_detection_layer(name: str, crs_authid: str):
         QgsField("bbox_y", QVariant.Int),
         QgsField("bbox_w", QVariant.Int),
         QgsField("bbox_h", QVariant.Int),
+        QgsField("label", QVariant.String),
+        QgsField("score", QVariant.Double),
+        QgsField("model_label", QVariant.String),
+        QgsField("model_score", QVariant.Double),
     ])
     layer.updateFields()
     QgsProject.instance().addMapLayer(layer)
     return layer
 
 
-def _append_detection_features(layer, detections: List[Dict], extent, raster_width: int, raster_height: int, source_label: str):
+def _append_detection_features(layer, detections: List[Dict], extent, raster_width: int, raster_height: int, source_label: str, raster_path: Optional[str] = None):
     from qgis.core import QgsFeature
 
     provider = layer.dataProvider()
@@ -153,14 +421,16 @@ def _append_detection_features(layer, detections: List[Dict], extent, raster_wid
         # Attempt to use rasterio transform when possible for precise georeferencing
         geometry = None
         try:
-            source = getattr(layer, 'dataProvider')().dataSourceUri()
-            # dataSourceUri may include a |; normalize
-            source_path = re.split(r"\|", source, maxsplit=1)[0]
+            source_path = raster_path
+            if not source_path:
+                source = getattr(layer, 'dataProvider')().dataSourceUri()
+                source_path = re.split(r"\|", source, maxsplit=1)[0]
             try:
                 import rasterio
-                with rasterio.open(source_path) as src:
-                    transform = src.transform
-                    geometry = _bbox_to_polygon_with_transform(transform, detection["bbox"])
+                if source_path:
+                    with rasterio.open(source_path) as src:
+                        transform = src.transform
+                        geometry = _bbox_to_polygon_with_transform(transform, detection["bbox"])
             except Exception:
                 geometry = None
         except Exception:
@@ -177,6 +447,24 @@ def _append_detection_features(layer, detections: List[Dict], extent, raster_wid
         feature["bbox_y"] = int(y)
         feature["bbox_w"] = int(w)
         feature["bbox_h"] = int(h)
+        if 'label' in detection:
+            feature['label'] = str(detection.get('label')) if detection.get('label') is not None else None
+        if 'score' in detection:
+            try:
+                feature['score'] = float(detection.get('score')) if detection.get('score') is not None else None
+            except Exception:
+                feature['score'] = None
+        # model fields (optional)
+        if 'model_label' in detection:
+            try:
+                feature['model_label'] = str(detection.get('model_label')) if detection.get('model_label') is not None else None
+            except Exception:
+                feature['model_label'] = None
+        if 'model_score' in detection:
+            try:
+                feature['model_score'] = float(detection.get('model_score')) if detection.get('model_score') is not None else None
+            except Exception:
+                feature['model_score'] = None
         features.append(feature)
 
     provider.addFeatures(features)
@@ -186,10 +474,7 @@ def _append_detection_features(layer, detections: List[Dict], extent, raster_wid
 
 def draw_detections(image_path: str, detections: List[Dict], output_path: str) -> str:
     """Draw detection boxes and ellipses on the input image and save as PNG."""
-    if cv2 is None or np is None:
-        raise RuntimeError("OpenCV and numpy are required for this function. Install from requirements.txt")
-
-    img = cv2.imread(image_path)
+    img = _read_image_array(image_path)
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {image_path}")
 
@@ -197,7 +482,18 @@ def draw_detections(image_path: str, detections: List[Dict], output_path: str) -
     for detection in detections:
         x, y, w, h = detection["bbox"]
         cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        label = f"area={int(detection['area'])}"
+        score = detection.get("score", detection.get("model_score"))
+        text_bits = []
+        if detection.get("label"):
+            text_bits.append(str(detection["label"]))
+        if score is not None:
+            try:
+                text_bits.append(f"{float(score):.2f}")
+            except Exception:
+                pass
+        if not text_bits:
+            text_bits.append(f"area={int(detection['area'])}")
+        label = " | ".join(text_bits)
         cv2.putText(
             overlay,
             label,
@@ -230,10 +526,49 @@ def draw_detections(image_path: str, detections: List[Dict], output_path: str) -
     return output_path
 
 
-def draw_georeferenced_map(raster_path: str, detections: List[Dict], output_path: str, title: str = "Madagascar Stadium Detection", raster_alpha: float = 0.12) -> str:
-    """Render a georeferenced map-style PNG with lon/lat axes and detection boxes."""
+def detect_stadium_grounding_dino(
+    image_path: str,
+    min_area: int = 5000,
+    text_prompt: str = "stadium. sports field. arena. athletics track. soccer stadium. football stadium.",
+    tile_size: int = 800,
+    tile_overlap: int = 100,
+    box_threshold: float = 0.25,
+    text_threshold: float = 0.20,
+    model_id: str = "IDEA-Research/grounding-dino-tiny",
+    device: Optional[str] = None,
+) -> List[Dict]:
+    """Run Grounding DINO zero-shot detection on a raster image."""
+    from src.grounding_dino_zero_shot import detect_stadium_grounding_dino as _impl
+
+    return _impl(
+        raster_path=image_path,
+        min_area=min_area,
+        text_prompt=text_prompt,
+        tile_size=tile_size,
+        tile_overlap=tile_overlap,
+        box_threshold=box_threshold,
+        text_threshold=text_threshold,
+        model_id=model_id,
+        device=device,
+    )
+
+
+def draw_georeferenced_map(raster_path: str, detections: List[Dict], output_path: str, title: str = None, region: str = "World", raster_alpha: float = 0.12) -> str:
+    """Render a georeferenced map-style PNG with lon/lat axes and detection boxes.
+    
+    Args:
+        raster_path: Path to raster image
+        detections: List of detection dicts with bbox
+        output_path: Where to save PNG
+        title: Optional title; if None, auto-generates from region
+        region: Region name (used for title if title is None)
+        raster_alpha: Transparency of raster overlay
+    """
     if plt is None or Rectangle is None or rasterio is None:
         raise RuntimeError("matplotlib and rasterio are required for map export")
+
+    if title is None:
+        title = f"{region} Stadium Detection"
 
     with rasterio.open(raster_path) as src:
         rgb = src.read([1, 2, 3])
@@ -323,12 +658,21 @@ def _fetch_osm_basemap(min_lon: float, min_lat: float, max_lon: float, max_lat: 
     return mosaic, (west, east, south, north)
 
 
-def detect_from_qgis_layer(layer, min_area: float = 1000.0, create_output_layer: bool = True) -> List[Dict]:
+def detect_from_qgis_layer(layer, min_area: float = 1000.0, create_output_layer: bool = True, model_path: Optional[str] = None, scaler_path: Optional[str] = None, model_object: Optional[object] = None, region: str = "World", detection_backend: str = "heuristic", text_prompt: str = None, tile_size: int = 800, tile_overlap: int = 100, box_threshold: float = 0.25, text_threshold: float = 0.20, model_id: str = "IDEA-Research/grounding-dino-tiny", device: Optional[str] = None) -> List[Dict]:
     """Detect stadium candidates from a QGIS vector or raster layer.
 
     This function is intended to be run from the QGIS Python console where `qgis` is available.
     For a raster layer it will run a simple thresholding + polygonize pipeline; for vector layers
     it filters by area and shape.
+    
+    Args:
+        layer: QGIS layer object
+        min_area: Minimum area threshold
+        create_output_layer: Whether to create output detection layer
+        model_path: Optional path to pickled model
+        scaler_path: Optional path to pickled scaler
+        model_object: Optional model object
+        region: Region name (used for output layer title)
     """
     try:
         from qgis.core import QgsVectorLayer, QgsFeatureRequest
@@ -353,12 +697,32 @@ def detect_from_qgis_layer(layer, min_area: float = 1000.0, create_output_layer:
             })
     else:
         raster_path = _normalize_raster_source(layer.source())
-        detections = detect_stadium_opencv(raster_path, min_area=int(min_area))
+        backend = (detection_backend or "heuristic").lower()
+        if backend in {"grounding_dino", "grounding-dino", "zero-shot", "zeroshot"}:
+            detections = detect_stadium_grounding_dino(
+                raster_path,
+                min_area=int(min_area),
+                text_prompt=text_prompt or "stadium. sports field. arena. athletics track. soccer stadium. football stadium.",
+                tile_size=tile_size,
+                tile_overlap=tile_overlap,
+                box_threshold=box_threshold,
+                text_threshold=text_threshold,
+                model_id=model_id,
+                device=device,
+            )
+        else:
+            detections = detect_stadium_opencv(
+                raster_path,
+                min_area=int(min_area),
+                model_path=model_path,
+                scaler_path=scaler_path,
+                model_object=model_object,
+            )
         if create_output_layer:
             # attach georeferenced polygons when the layer is a raster
             try:
                 crs_authid = layer.crs().authid() or "EPSG:4326"
-                output_layer = _create_detection_layer(f"{layer.name()} stadium detections", crs_authid)
+                output_layer = _create_detection_layer(f"{region} stadium detections", crs_authid)
                 _append_detection_features(
                     output_layer,
                     detections,
@@ -366,6 +730,7 @@ def detect_from_qgis_layer(layer, min_area: float = 1000.0, create_output_layer:
                     layer.width(),
                     layer.height(),
                     layer.name(),
+                    raster_path,
                 )
             except Exception:
                 # detection results are still returned even if a map layer cannot be created
@@ -375,11 +740,38 @@ def detect_from_qgis_layer(layer, min_area: float = 1000.0, create_output_layer:
     return detections
 
 
-def run_stadium_detection(layer=None, min_area_pixels: int = 5000, create_output_layer: bool = True) -> List[Dict]:
-    """Convenience entry point for QGIS 3.44.8 Python console.
+def run_stadium_detection(
+    layer=None,
+    min_area_pixels: int = 5000,
+    create_output_layer: bool = True,
+    model_path: Optional[str] = None,
+    scaler_path: Optional[str] = None,
+    model_object: Optional[object] = None,
+    region: str = "World",
+    detection_backend: str = "heuristic",
+    text_prompt: str = None,
+    tile_size: int = 800,
+    tile_overlap: int = 100,
+    box_threshold: float = 0.25,
+    text_threshold: float = 0.20,
+    model_id: str = "IDEA-Research/grounding-dino-tiny",
+    device: Optional[str] = None,
+) -> List[Dict]:
+    """Convenience entry point for QGIS Python console.
 
     If `layer` is omitted, uses `iface.activeLayer()`.
     For raster layers this will also add a polygon output layer to the project.
+    Accepts optional `model_path` / `scaler_path` or `model_object` to annotate detections
+    with model predictions (fields `model_label` and `model_score`).
+    
+    Args:
+        layer: QGIS layer (or None to use active layer)
+        min_area_pixels: Minimum detection area in pixels
+        create_output_layer: Whether to create output layer
+        model_path: Optional path to pickled model
+        scaler_path: Optional path to pickled scaler
+        model_object: Optional model object
+        region: Region name for output layer title (e.g., "California", "Madagascar")
     """
     try:
         from qgis.core import QgsProject
@@ -393,7 +785,23 @@ def run_stadium_detection(layer=None, min_area_pixels: int = 5000, create_output
     if layer is None:
         raise ValueError("No active layer found.")
 
-    results = detect_from_qgis_layer(layer, min_area=float(min_area_pixels), create_output_layer=create_output_layer)
+    results = detect_from_qgis_layer(
+        layer,
+        min_area=float(min_area_pixels),
+        create_output_layer=create_output_layer,
+        model_path=model_path,
+        scaler_path=scaler_path,
+        model_object=model_object,
+        region=region,
+        detection_backend=detection_backend,
+        text_prompt=text_prompt,
+        tile_size=tile_size,
+        tile_overlap=tile_overlap,
+        box_threshold=box_threshold,
+        text_threshold=text_threshold,
+        model_id=model_id,
+        device=device,
+    )
     return results
 
 
