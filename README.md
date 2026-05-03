@@ -22,10 +22,30 @@ pip install -r requirements.txt
 Usage (inside QGIS Python console):
 
 ```python
-from src.detect_stadium import detect_from_qgis_layer
-# Provide a vector or raster layer selected in QGIS
-result = detect_from_qgis_layer(iface.activeLayer())
+import sys
+sys.path.append(r"C:\Users\MaZik\GeoIA")
+
+from src.detect_stadium import run_stadium_detection
+
+# Select a raster or vector layer in QGIS, then run this.
+result = run_stadium_detection(iface.activeLayer(), min_area=5000)
 print(result)
+```
+
+QGIS 3.44.8 test workflow
+
+1. Open QGIS 3.44.8.
+2. Load a GeoTIFF or vector file with a stadium-like area.
+3. Click the target layer in the Layers panel so it becomes the active layer.
+4. Open `Plugins -> Python Console`.
+5. Paste the snippet above.
+6. For raster layers, a new polygon layer named like `YourLayer stadium detections` is added to the project.
+7. Zoom to the new layer and inspect the bounding boxes.
+
+If you want to test the PNG overlay path outside QGIS first:
+
+```bash
+python scripts/run_detect.py --image data/sample.tif --min-area 100 --output-png output/detections.png
 ```
 
 Usage (standalone with OpenCV):
@@ -39,6 +59,14 @@ To save a PNG overlay with detected candidates:
 ```bash
 python scripts/run_detect.py --image data/sample.tif --output-png output/detections.png
 ```
+
+For the Madagascar test, the output is now a map-style PNG with longitude/latitude axes and detection boxes:
+
+```bash
+python scripts/test_madagascar.py --output-dir data/madagascar_test
+```
+
+The map export is written to [data/madagascar_test/madagascar_map.png](data/madagascar_test/madagascar_map.png).
 
 Next steps
 
